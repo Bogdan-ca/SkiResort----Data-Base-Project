@@ -1,0 +1,66 @@
+use ski_resort_nosql;
+
+// Create collections
+db.createCollection("schiori");
+db.createCollection("cabane");
+db.createCollection("instructori");
+
+// Insert a new skier
+db.schiori.insertOne({
+  nume: "Popescu Ion",
+  telefon: "0712345678",
+  email: "ion@exemplu.com",
+  nivel_experienta: "incepator",
+  data_nasterii: ISODate("2001-02-15"),
+  rezervari_camera: [],
+  rezervari_echipament: []
+});
+
+// Update the experience level of the skier
+db.schiori.updateOne(
+  { email: "ion@exemplu.com" },
+  { $set: { nivel_experienta: "mediu" } }
+);
+
+// Delete a skier
+db.schiori.deleteOne({ email: "ion@exemplu.com" });
+
+// Query: advanced skiers, sorted alphabetically by name
+db.schiori.find(
+  { nivel_experienta: "avansat" },
+  { nume: 1, email: 1, nivel_experienta: 1, _id: 0 }
+).sort({ nume: 1 });
+
+// Query: cabins with exactly 2 Family rooms
+db.cabane.find(
+  {
+    "camere": { $elemMatch: { tip: "Family" } },
+    $expr: { $eq: [ { $size: "$camere" }, 2 ] }
+  },
+  { nume: 1, locatie: 1, camere: 1 }
+);
+
+// Query: skiers with at least 2 room reservations
+db.schiori.find({
+  $expr: { $gte: [ { $size: "$rezervari_camera" }, 2 ] }
+});
+
+// Aggregation: equipment reservations in Jan 2025, sorted by total price desc
+db.schiori.aggregate([
+  { $unwind: "$rezervari_echipament" },
+  { $match: {
+      "rezervari_echipament.data_inceput": {
+        $gte: ISODate("2025-01-01"),
+        $lt:  ISODate("2025-02-01")
+      }
+    }
+  },
+  { $sort: { "rezervari_echipament.tarif_total": -1 } },
+  { $project: {
+      nume: 1,
+      "rezervari_echipament.data_inceput": 1,
+      "rezervari_echipament.tarif_total": 1,
+      _id: 0
+    }
+  }
+]);

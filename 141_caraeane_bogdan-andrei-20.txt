@@ -1,0 +1,84 @@
+-- 1. Activează Query Result Cache la nivel de sistem
+ALTER SYSTEM SET result_cache_max_size = 100M;
+ALTER SYSTEM SET result_cache_mode     = 'FORCE'
+/
+
+-- 2. Curăță tot cache-ul de rezultate (nu există PURGE pe obiecte separate)
+EXEC DBMS_RESULT_CACHE.FLUSH;
+/
+
+-- 3. Interogare cu hint RESULT_CACHE și JOIN corect pe Rezervare_Camera
+SELECT /*+ RESULT_CACHE */
+     c.id_cabana,
+     c.nume,
+     COUNT(rc.id_rezervare_camera) AS nr_rezervari
+  FROM Cabana            c
+  JOIN Camera            cam ON cam.id_cabana          = c.id_cabana
+  JOIN Rezervare         r   ON r.id_camera            = cam.id_camera
+  JOIN Rezervare_Camera  rc  ON rc.id_rezervare_camera = r.id_rezervare_camera
+ GROUP BY c.id_cabana, c.nume
+/
+-- relațiile corecte: Rezervare_Camera → Rezervare → Camera → Cabana :contentReference[oaicite:0]{index=0}
+
+-- 4. Funcție PL/SQL cu RESULT_CACHE
+CREATE OR REPLACE FUNCTION get_tip_camera_rate(
+  p_id_tip_camera IN NUMBER
+) RETURN NUMBER
+  RESULT_CACHE
+IS
+  v_rate NUMBER;
+BEGIN
+  SELECT tarif_zi
+    INTO v_rate
+    FROM Tip_Camera
+   WHERE id_tip_camera = p_id_tip_camera;
+  RETURN v_rate;
+END get_tip_camera_rate;
+/
+
+-- 5. Demonstrație cache hits la al doilea apel
+SET SERVEROUTPUT ON
+DECLARE
+  v1 NUMBER := get_tip_camera_rate(3);
+  v2 NUMBER := get_tip_camera_rate(3);
+BEGIN
+  DBMS_OUTPUT.PUT_LINE('Rate: ' || v1 || ', ' || v2);
+END;
+/
+
+-- 6. Statistici cache: se interoghează view-ul dinamic
+SELECT *
+  FROM V$RESULT_CACHE_STATISTICS
+/
+
+-- 7. (Opțional) reset complet al cache-ului
+EXEC DBMS_RESULT_CACHE.FLUSH;
+/
+
+-- 8. Privilegii necesare pentru materialized view
+-- Asigură-te că ai:
+--   GRANT CREATE MATERIALIZED VIEW TO <utilizator>;
+--   GRANT EXECUTE ON DBMS_MVIEW TO <utilizator>;
+
+-- 9. Creare Materialized View cu REFRESH COMPLETE (evităm MV logs)
+CREATE MATERIALIZED VIEW mv_rezervari_cabane
+  BUILD IMMEDIATE
+  REFRESH COMPLETE ON DEMAND
+AS
+SELECT c.id_cabana,
+       c.nume,
+       SUM(rc.tarif_total) AS total_incasari
+  FROM Cabana           c
+  JOIN Camera           cam ON cam.id_cabana          = c.id_cabana
+  JOIN Rezervare        r   ON r.id_camera            = cam.id_camera
+  JOIN Rezervare_Camera rc  ON rc.id_rezervare_camera = r.id_rezervare_camera
+ GROUP BY c.id_cabana, c.nume
+/
+
+-- 10. Reîmprospătare manuală (complete)
+EXEC DBMS_MVIEW.REFRESH('MV_REZERVARI_CABANE', 'C');
+/
+
+-- 11. Activare In-Memory Column Store
+ALTER TABLE Rezervare_Camera INMEMORY;
+/

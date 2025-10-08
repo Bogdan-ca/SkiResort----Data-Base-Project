@@ -1,0 +1,312 @@
+-- Exercitiul 12
+
+-- Cererea 1: subcerere sincronizată și subcerere în HAVING
+-- -- Filtrează cabanele a căror sumă totală a tarifelor 
+-- rezervărilor depășește media generală a tuturor rezervărilor, 
+-- apoi pentru fiecare astfel de cabană recuperează schiorii care au făcut rezervări 
+-- printr-o subcerere sincronizată și, pentru fiecare schior, calculează numărul de lecții și de instructori pe care i-a avut.
+
+SELECT
+    c.id_cabana,
+    c.nume         AS nume_cabana,
+    s.id_schior,
+    s.nume         AS nume_schior,
+    COUNT(DISTINCT ls.id_lectie)    AS nr_lectii,
+    COUNT(DISTINCT ls.id_instructor) AS nr_instructori
+FROM Cabana c
+JOIN Camera cam          ON cam.id_cabana = c.id_cabana
+JOIN Rezervare r         ON r.id_camera = cam.id_camera
+JOIN Rezervare_Camera rc ON rc.id_rezervare_camera = r.id_rezervare_camera
+JOIN Schior s            ON s.id_schior IN (
+    SELECT rc2.id_schior
+    FROM Rezervare_Camera rc2
+    JOIN Rezervare r2        ON r2.id_rezervare_camera = rc2.id_rezervare_camera
+    JOIN Camera cam2         ON cam2.id_camera = r2.id_camera
+    WHERE cam2.id_cabana = c.id_cabana
+)
+LEFT JOIN Lectie_Schi ls ON ls.id_schior = s.id_schior
+GROUP BY
+    c.id_cabana,
+    c.nume,
+    s.id_schior,
+    s.nume
+HAVING
+    SUM(rc.tarif_total) > (
+        SELECT AVG(tarif_total)
+        FROM Rezervare_Camera
+    )
+ORDER BY
+    SUM(rc.tarif_total) DESC,
+    s.nume;
+
+
+
+-- Cererea 2: Pentru fiecare tip de camera, afisati denumirea, tariful, numarul total de camere si media capacitatii de persoane.
+SELECT t.denumire,
+       t.tarif_zi,
+       stats.nr_camere,
+       stats.capacitate_medie
+FROM Tip_Camera t
+JOIN (
+    SELECT id_tip_camera,
+           COUNT(*) AS nr_camere,
+           ROUND(AVG(capacitate_pers),2) AS capacitate_medie
+    FROM Camera
+    GROUP BY id_tip_camera
+) stats
+ON t.id_tip_camera = stats.id_tip_camera;
+
+
+-- Cererea 3: Pentru fiecare cabana, afisati id-ul, numele, 
+-- suma totala a tarifelor de cazare din rezervari si numarul de rezervari, 
+-- doar pentru cabanele unde suma totala depaseste 1000.
+SELECT c.id_cabana,
+       c.nume,
+       SUM(rc.tarif_total) AS tarif_rezervari,
+       COUNT(DISTINCT rc.id_rezervare_camera) AS nr_rezervari
+FROM Cabana c
+JOIN Camera cam ON c.id_cabana = cam.id_cabana
+JOIN Rezervare r ON r.id_camera = cam.id_camera
+JOIN Rezervare_Camera rc ON r.id_rezervare_camera = rc.id_rezervare_camera
+GROUP BY c.id_cabana, c.nume
+HAVING SUM(rc.tarif_total) > 1000;
+
+-- Cererea 4: Pentru fiecare echipament, afisati id-ul, denumirea, valoarea garantiei in ani si o eticheta a garantiei 
+-- (cu DECODE: 0 'Fara garantie', 1  'Standard', peste 2 'Extinsa'). 
+-- Ordonati descrescator dupa garantie si apoi dupa denumire.
+SELECT
+    e.id_echipament,
+    e.denumire,
+    tc.garantie_ani,
+    DECODE(
+        SIGN(tc.garantie_ani),
+        0, 'Fara garantie',
+        DECODE(
+            SIGN(tc.garantie_ani - 2),
+            -1, 'Standard',
+            'Extinsa'
+        )
+    ) AS tip_garantie
+FROM Echipament e
+JOIN Tip_Calitate tc ON e.id_tip_calitate = tc.id_tip_calitate
+ORDER BY tc.garantie_ani DESC, e.denumire ASC;
+
+
+-- Cererea 5: Pentru fiecare inchiriere, afisati id-ul, denumirea echipamentului cu majuscule, 
+-- perioada de inchiriere in zile, anul, ziua saptamanii, 
+-- tipul zilei (weekend/weekday cu CASE), username-ul extras din emailul schiorului (cu majuscule) si numele schiorului cu prima litera mare.
+WITH rental_cte AS (
+    SELECT i.id_inchiriere,
+           e.denumire,
+           i.data_inceput,
+           i.data_final,
+           s.email,
+           s.nume
+    FROM Inchiriere i
+    JOIN Rezervare_Echipament re ON i.id_rezervare_echipament = re.id_rezervare_echipament
+    JOIN Echipament e ON i.id_echipament = e.id_echipament
+    JOIN Schior s ON re.id_schior = s.id_schior
+)
+SELECT id_inchiriere,
+       UPPER(denumire) AS denumire_echipament,
+       (data_final - data_inceput) AS zile_inchiriere,
+       TO_CHAR(data_inceput, 'YYYY') AS an_inchiriere,
+       TO_CHAR(data_inceput, 'DAY', 'NLS_DATE_LANGUAGE=ENGLISH') AS zi_saptamana,
+       CASE WHEN TO_CHAR(data_inceput, 'DY', 'NLS_DATE_LANGUAGE=ENGLISH') IN ('SAT','SUN')
+            THEN 'WEEKEND' ELSE 'WEEKDAY' END AS tip_zi,
+       UPPER(SUBSTR(email, 1, INSTR(email, '@')-1)) AS username_email,
+       INITCAP(nume) AS nume_schior
+FROM rental_cte;
+
+
+
+-- Exercitiul 13
+
+-- UPDATE 1: Creste tariful cu 10% pentru camerele sub media capacitatii
+UPDATE Tip_Camera
+SET tarif_zi = tarif_zi * 1.10
+WHERE id_tip_camera IN (
+    SELECT id_tip_camera
+    FROM Camera
+    GROUP BY id_tip_camera
+    HAVING AVG(capacitate_pers) < (
+        SELECT AVG(capacitate_pers)
+        FROM Camera
+    )
+);
+
+-- UPDATE 2: Extinde valabilitatea abonamentelor expirate cu 5 zile
+UPDATE Abonament
+SET data_expirare = SYSDATE + 5
+WHERE data_expirare < SYSDATE;
+
+
+
+-- UPDATE 3: Creste garantia cu 1 an pentru echipamente premium
+UPDATE Tip_Calitate
+SET garantie_ani = garantie_ani + 1
+WHERE id_tip_calitate IN (
+    SELECT id_tip_calitate
+    FROM Echipament
+    WHERE id_tip_calitate IN (
+        SELECT id_tip_calitate
+        FROM Tip_Calitate
+        WHERE denumire = 'premium'
+    )
+);
+
+-- DELETE 1: Sterge inchirierile finalizate
+DELETE FROM Inchiriere
+WHERE data_final < SYSDATE;
+
+-- DELETE2: Sterge angajatii la evenimente care nu au niciun bilet asociat
+DELETE FROM Angajat_Eveniment
+WHERE id_eveniment IN (
+    SELECT ae.id_eveniment
+    FROM Angajat_Eveniment ae
+    LEFT JOIN Bilet b ON ae.id_eveniment = b.id_eveniment
+    GROUP BY ae.id_eveniment
+    HAVING COUNT(b.id_bilet) = 0
+);
+
+
+-- DELETE 3: Sterge toti schiorii care nu au niciun bilet la niciun eveniment, nu au avut niciodata rezervare la echipament si nu au avut niciodata rezervare la cabana
+DELETE FROM Schior
+WHERE id_schior NOT IN (
+    SELECT DISTINCT id_schior FROM Bilet
+)
+AND id_schior NOT IN (
+    SELECT DISTINCT id_schior FROM Rezervare_Echipament
+)
+AND id_schior NOT IN (
+    SELECT DISTINCT id_schior FROM Rezervare_Camera
+);
+
+-- Exercitiul 14
+
+CREATE OR REPLACE VIEW v_cheltuieli_schiori AS
+SELECT
+    s.id_schior,
+    s.nume,
+    s.email,
+    SUM(rc.tarif_total) AS total_cheltuit
+FROM Schior s
+JOIN Rezervare_Camera rc ON s.id_schior = rc.id_schior
+GROUP BY s.id_schior, s.nume, s.email;
+
+-- Vizualizare permisa
+
+UPDATE v_schior_email
+SET email = 'nou@email.com'
+WHERE id_schior = 1;
+
+
+-- Vizualizare permisa
+
+UPDATE v_cheltuieli_schiori
+SET total_cheltuit = 1000
+WHERE id_schior = 1;
+
+--Exercitiul 15
+
+-- a) Cerere cu outer join pe minimum 4 tabele
+-- Afișați lista tuturor schiorilor, numele instructorilor 
+-- cu care au avut lecții de schi, denumirea cabanei unde 
+-- au fost cazați și emailul lor. 
+-- Dacă un schior nu a avut nici o lecție sau nu a fost cazat în nici o cabană, să apară totuși în rezultat 
+
+SELECT
+    s.nume AS nume_schior,
+    s.email,
+    i.nume AS nume_instructor,
+    c.nume AS nume_cabana
+FROM
+    Schior s
+        LEFT OUTER JOIN Lectie_Schi ls ON s.id_schior = ls.id_schior
+        LEFT OUTER JOIN Instructor i ON ls.id_instructor = i.id_instructor
+        LEFT OUTER JOIN Rezervare_Camera rc ON s.id_schior = rc.id_schior
+        LEFT OUTER JOIN Rezervare r ON rc.id_rezervare_camera = r.id_rezervare_camera
+        LEFT OUTER JOIN Camera cam ON r.id_camera = cam.id_camera
+        LEFT OUTER JOIN Cabana c ON cam.id_cabana = c.id_cabana;
+
+
+-- b) Cerere ce utilizează operația de DIVISION
+-- Afișați schiorii care au rezervat toate tipurile de camere existente în sistem 
+-- (adică au avut rezervări pentru fiecare tip de cameră din Tip_Camera).
+
+SELECT s.nume, s.email
+FROM Schior s
+WHERE (
+    SELECT COUNT(DISTINCT cam.id_tip_camera)
+    FROM Rezervare_Camera rc
+    JOIN Rezervare r ON rc.id_rezervare_camera = r.id_rezervare_camera
+    JOIN Camera cam ON r.id_camera = cam.id_camera
+    WHERE rc.id_schior = s.id_schior
+) >= 3;
+
+
+
+-- c) Cerere pentru analiza TOP-N
+-- Afișați primii 3 schiori care au cheltuit cei mai mulți bani pe rezervările de camere, 
+-- ordonați descrescător după suma totală cheltuită.
+
+SELECT *
+FROM (
+    SELECT
+      s.nume,
+      s.email,
+      SUM(rc.tarif_total) AS total_cheltuit
+    FROM Schior s
+    JOIN Rezervare_Camera rc ON s.id_schior = rc.id_schior
+    GROUP BY s.nume, s.email
+    ORDER BY total_cheltuit DESC
+)
+WHERE ROWNUM <= 3;
+
+-- Exercitiul 16 
+WITH windowed AS (
+  SELECT
+    cam.id_cabana,
+    rc.id_schior,
+    SUM(rc.tarif_total) 
+      OVER (PARTITION BY cam.id_cabana, rc.id_schior)  AS suma_schior,
+    SUM(rc.tarif_total) 
+      OVER (PARTITION BY cam.id_cabana)                AS suma_totala_cabana,
+    AVG(rc.tarif_total) 
+      OVER ()                                         AS avg_global
+  FROM Rezervare_Camera rc
+  JOIN Rezervare r  ON r.id_rezervare_camera = rc.id_rezervare_camera
+  JOIN Camera cam   ON cam.id_camera = r.id_camera
+),
+filtered AS (
+  SELECT DISTINCT
+    id_cabana,
+    id_schior,
+    suma_schior
+  FROM windowed
+  WHERE suma_totala_cabana > avg_global
+),
+lect_stats AS (
+  SELECT
+    id_schior,
+    COUNT(DISTINCT id_lectie)     AS nr_lectii,
+    COUNT(DISTINCT id_instructor) AS nr_instructori
+  FROM Lectie_Schi
+  GROUP BY id_schior
+)
+SELECT
+  c.id_cabana,
+  c.nume             AS nume_cabana,
+  s.id_schior,
+  s.nume             AS nume_schior,
+  COALESCE(ls.nr_lectii,0)      AS nr_lectii,
+  COALESCE(ls.nr_instructori,0) AS nr_instructori,
+  f.suma_schior                AS tarif_total_schior
+FROM filtered f
+JOIN Cabana c  ON c.id_cabana = f.id_cabana
+JOIN Schior s  ON s.id_schior = f.id_schior
+LEFT JOIN lect_stats ls 
+  ON ls.id_schior = f.id_schior
+ORDER BY
+  f.suma_schior DESC,
+  s.nume;
